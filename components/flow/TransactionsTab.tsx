@@ -435,9 +435,9 @@ export default function TransactionsTab({}: TransactionsTabProps) {
                                 <div
                                   className={`font-bold text-sm md:text-lg leading-tight mb-1 ${
                                     transaction.type === "expense"
-                                      ? "text-red-500"
+                                      ? "text-red"
                                       : transaction.type === "income"
-                                      ? "text-green-500"
+                                      ? "text-green"
                                       : "text-blue-500"
                                   }`}
                                 >

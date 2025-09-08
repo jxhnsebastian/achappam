@@ -12,7 +12,6 @@ import {
   TrendingUp,
   TrendingDown,
   DollarSign,
-  PieChart,
   BarChart3,
   RefreshCw,
   AlertCircle,
@@ -27,9 +26,6 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  PieChart as RechartsPieChart,
-  Cell,
-  Pie,
 } from "recharts";
 import {
   Account,
@@ -101,6 +97,10 @@ const InsightsDashboard: React.FC = () => {
         String(now.getDate() + 1).padStart(2, "0"),
     };
   });
+  const [granularity, setGranularity] = useState<
+    "hour" | "date" | "week" | "month"
+  >("date");
+  const [chartType, setChartType] = useState<"flowing" | "blocky">("blocky");
 
   // Chart customization state
   const [visibleSeries, setVisibleSeries] = useState<Set<string>>(
@@ -249,14 +249,25 @@ const InsightsDashboard: React.FC = () => {
     return formatCurrency(totalAmount, targetCurrency);
   };
 
-  // Format Y-axis values
   const formatYAxisValue = (value: number): string => {
-    if (value >= 1000000) {
+    const absValue = Math.abs(value);
+
+    if (absValue >= 1000000) {
       return `${(value / 1000000).toFixed(1)}M`;
-    } else if (value >= 1000) {
+    } else if (absValue >= 1000) {
       return `${(value / 1000).toFixed(1)}K`;
+    } else if (absValue >= 1) {
+      if (absValue >= 100) {
+        return value.toFixed(0);
+      } else if (absValue >= 10) {
+        return value.toFixed(1);
+      } else {
+        return value.toFixed(2);
+      }
+    } else {
+      // For values less than 1
+      return value.toFixed(3);
     }
-    return value.toString();
   };
 
   // Chart colors
@@ -274,9 +285,9 @@ const InsightsDashboard: React.FC = () => {
     if (!data?.timeSeries) return [];
 
     const timePoints = new Set<string>();
-    const chartData: { [time: string]: ChartDataPoint } = {};
+    const rawData: { [time: string]: ChartDataPoint } = {};
 
-    // Collect all time points
+    // Collect all time points and raw data
     [...Array.from(visibleSeries)].forEach((seriesKey) => {
       const series = availableSeries.find((s) => s.key === seriesKey);
       if (!series) return;
@@ -289,51 +300,116 @@ const InsightsDashboard: React.FC = () => {
       }
 
       seriesData.forEach((entry) => {
-        timePoints.add(entry.time);
-      });
-    });
+        const groupedTime = groupTimeByGranularity(entry.time, granularity);
+        timePoints.add(groupedTime);
 
-    // Initialize chart data
-    Array.from(timePoints)
-      .sort()
-      .forEach((time) => {
-        chartData[time] = {
-          time: new Date(time).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-          }),
-        };
-      });
+        if (!rawData[groupedTime]) {
+          rawData[groupedTime] = {
+            time: formatTimeLabel(groupedTime, granularity),
+          };
+        }
 
-    // Populate data for each visible series
-    [...Array.from(visibleSeries)].forEach((seriesKey) => {
-      const series = availableSeries.find((s) => s.key === seriesKey);
-      if (!series) return;
-
-      let seriesData: any[] = [];
-      if (series.type === "type" && data.timeSeries.byType) {
-        seriesData = data.timeSeries.byType[seriesKey] || [];
-      } else if (series.type === "category" && data.timeSeries.byCategory) {
-        seriesData = data.timeSeries.byCategory[seriesKey] || [];
-      }
-
-      seriesData.forEach((entry) => {
         const targetCurrency =
           currencyView === "split"
             ? "USD"
             : (currencyView.toUpperCase() as Currency);
-        const amount =
-          currencyView === "split"
-            ? entry.amount
-            : convertAmount(entry.amount, entry.currency, targetCurrency);
 
-        if (chartData[entry.time]) {
-          chartData[entry.time][seriesKey] = amount;
-        }
+        const amount = convertAmount(
+          entry.amount,
+          entry.currency,
+          targetCurrency
+        );
+
+        rawData[groupedTime][seriesKey] =
+          ((rawData[groupedTime][seriesKey] || 0) as number) + amount;
       });
     });
 
-    return Object.values(chartData);
+    // Fill missing data points with 0 for continuity
+    const sortedTimePoints = Array.from(timePoints).sort();
+    const continuousData: ChartDataPoint[] = [];
+
+    sortedTimePoints.forEach((timePoint) => {
+      const dataPoint: ChartDataPoint = {
+        time: formatTimeLabel(timePoint, granularity),
+      };
+
+      [...Array.from(visibleSeries)].forEach((seriesKey) => {
+        dataPoint[seriesKey] = rawData[timePoint]?.[seriesKey] || 0;
+      });
+
+      continuousData.push(dataPoint);
+    });
+    console.log(continuousData);
+    return continuousData;
+  };
+
+  // Helper function to group time by granularity
+  const groupTimeByGranularity = (
+    timeStr: string,
+    granularity: string
+  ): string => {
+    const date = new Date(timeStr);
+
+    switch (granularity) {
+      case "hour":
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+          2,
+          "0"
+        )}-${String(date.getDate()).padStart(2, "0")}-${String(
+          date.getHours()
+        ).padStart(2, "0")}`;
+      case "date":
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+          2,
+          "0"
+        )}-${String(date.getDate()).padStart(2, "0")}`;
+      case "week":
+        const weekStart = new Date(date);
+        weekStart.setDate(date.getDate() - date.getDay());
+        return `${weekStart.getFullYear()}-W${String(
+          Math.ceil(
+            (weekStart.getTime() -
+              new Date(weekStart.getFullYear(), 0, 1).getTime()) /
+              (7 * 24 * 60 * 60 * 1000)
+          )
+        ).padStart(2, "0")}`;
+      case "month":
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+          2,
+          "0"
+        )}`;
+      default:
+        return timeStr;
+    }
+  };
+
+  // Helper function to format time labels
+  const formatTimeLabel = (timeStr: string, granularity: string): string => {
+    switch (granularity) {
+      case "hour":
+        const hourDate = new Date(timeStr.replace(/-(\d{2})$/, "T$1:00:00"));
+        return hourDate.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+        });
+      case "date":
+        return new Date(timeStr).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+        });
+      case "week":
+        const weekNum = timeStr.split("-W")[1];
+        return `W${weekNum}`;
+      case "month":
+        return new Date(timeStr + "-01").toLocaleDateString("en-US", {
+          month: "short",
+          year: "2-digit",
+        });
+      default:
+        return timeStr;
+    }
   };
 
   const prepareCategoryData = (): CategoryDataPoint[] => {
@@ -397,24 +473,12 @@ const InsightsDashboard: React.FC = () => {
     fetchInsights(filters);
   };
 
-  // Loading state
-  if (loading) {
-    return (
-      <div className="min-h-screen text-white p-4 flex items-center justify-center">
-        <div className="flex items-center space-x-3">
-          <RefreshCw className="h-8 w-8 animate-spin text-purple-400" />
-          <span className="text-lg">Loading insights...</span>
-        </div>
-      </div>
-    );
-  }
-
   // Error state
   if (error) {
     return (
       <div className="min-h-screen text-white p-4 flex items-center justify-center">
         <div className="text-center bg-slate-800/50 backdrop-blur-sm p-8 rounded-2xl border border-slate-700">
-          <AlertCircle className="h-16 w-16 text-red-400 mx-auto mb-6" />
+          <AlertCircle className="h-16 w-16 text-red mx-auto mb-6" />
           <h2 className="text-2xl font-bold mb-4">Error Loading Insights</h2>
           <p className="text-slate-400 mb-6">{error}</p>
           <Button
@@ -558,341 +622,364 @@ const InsightsDashboard: React.FC = () => {
           </div>
         </div>
       </div>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Key Metrics */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm hover:bg-slate-800/70 transition-all duration-300">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-slate-400 font-medium">
-                    Total Balance
-                  </p>
-                  <p className="text-2xl font-bold text-emerald-400 mt-2">
-                    {formatAmount(data.totalBalance)}
-                  </p>
-                </div>
-                <div className="w-12 h-12 bg-emerald-500/20 rounded-xl flex items-center justify-center">
-                  <DollarSign className="h-6 w-6 text-emerald-400" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm hover:bg-slate-800/70 transition-all duration-300">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-slate-400 font-medium">Income</p>
-                  <p className="text-2xl font-bold text-blue-400 mt-2">
-                    {formatAmount(data.income)}
-                  </p>
-                </div>
-                <div className="w-12 h-12 bg-blue-500/20 rounded-xl flex items-center justify-center">
-                  <TrendingUp className="h-6 w-6 text-blue-400" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm hover:bg-slate-800/70 transition-all duration-300">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-slate-400 font-medium">Expenses</p>
-                  <p className="text-2xl font-bold text-red-400 mt-2">
-                    {formatAmount(data.expense)}
-                  </p>
-                </div>
-                <div className="w-12 h-12 bg-red-500/20 rounded-xl flex items-center justify-center">
-                  <TrendingDown className="h-6 w-6 text-red-400" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm hover:bg-slate-800/70 transition-all duration-300">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-slate-400 font-medium">
-                    Transactions
-                  </p>
-                  <p className="text-2xl font-bold text-purple-400 mt-2">
-                    {data.transactionCount}
-                  </p>
-                </div>
-                <div className="w-12 h-12 bg-purple-500/20 rounded-xl flex items-center justify-center">
-                  <BarChart3 className="h-6 w-6 text-purple-400" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+      {loading ? (
+        <div className="min-h-screen text-white p-4 flex items-center justify-center">
+          <div className="flex items-center space-x-3">
+            <RefreshCw className="h-8 w-8 animate-spin text-purple-400" />
+            <span className="text-lg">Loading insights...</span>
+          </div>
         </div>
-
-        {/* Charts Row */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-          {/* Enhanced Time Series Chart */}
-          <Card className="bg-slate-800/50 border-slate-700 backdrop-blur-sm">
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center gap-3">
-                  <TrendingUp className="h-5 w-5 text-purple-400" />
-                  <span className="bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">
-                    Financial Trends
-                  </span>
-                </CardTitle>
-                <Button
-                  onClick={() => setShowSeriesSelector(!showSeriesSelector)}
-                  variant="ghost"
-                  size="sm"
-                  className="text-slate-400 hover:text-white hover:bg-slate-700"
-                >
-                  <Settings2 className="h-4 w-4" />
-                </Button>
-              </div>
-
-              {/* Series Selector */}
-              {showSeriesSelector && (
-                <div className="mt-4 p-4 bg-slate-900/50 rounded-xl border border-slate-700">
-                  <p className="text-sm font-medium text-slate-300 mb-3">
-                    Select Data to Display:
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {availableSeries.map((series) => (
-                      <Button
-                        key={series.key}
-                        onClick={() => toggleSeries(series.key)}
-                        size="sm"
-                        className={`justify-start gap-2 ${
-                          visibleSeries.has(series.key)
-                            ? "bg-slate-700 text-white border border-slate-600"
-                            : "bg-transparent text-slate-400 hover:bg-slate-800 hover:text-white"
-                        }`}
-                      >
-                        <div
-                          className="w-3 h-3 rounded-full"
-                          style={{ backgroundColor: series.color }}
-                        />
-                        {visibleSeries.has(series.key) ? (
-                          <Eye className="h-3 w-3" />
-                        ) : (
-                          <EyeOff className="h-3 w-3" />
-                        )}
-                        {series.name}
-                      </Button>
-                    ))}
+      ) : (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          {/* Key Metrics */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <Card className="bg-[#14161f] hover:bg-[#1c1e2b] rounded-sm transition-all duration-300 p-0">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-400 font-medium">
+                      Total Balance
+                    </p>
+                    <p className="text-2xl font-bold text-green mt-2">
+                      {formatAmount(data.totalBalance)}
+                    </p>
+                  </div>
+                  <div className="w-12 h-12 bg-emerald-500/20 rounded-xl flex items-center justify-center">
+                    <DollarSign className="h-6 w-6 text-green" />
                   </div>
                 </div>
-              )}
+              </CardContent>
+            </Card>
 
-              {/* Legend */}
-              <div className="flex flex-wrap gap-4 mt-4">
-                {[...Array.from(visibleSeries)].map((seriesKey) => {
-                  const series = availableSeries.find(
-                    (s) => s.key === seriesKey
-                  );
-                  if (!series) return null;
-                  return (
-                    <div key={seriesKey} className="flex items-center gap-2">
-                      <div
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: series.color }}
-                      />
-                      <span className="text-sm text-slate-300">
-                        {series.name}
-                      </span>
+            <Card className="bg-[#14161f] hover:bg-[#1c1e2b] rounded-sm transition-all duration-300 p-0">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-400 font-medium">Income</p>
+                    <p className="text-2xl font-bold text-blue-400 mt-2">
+                      {formatAmount(data.income)}
+                    </p>
+                  </div>
+                  <div className="w-12 h-12 bg-blue-500/20 rounded-xl flex items-center justify-center">
+                    <TrendingUp className="h-6 w-6 text-blue-400" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-[#14161f] hover:bg-[#1c1e2b] rounded-sm transition-all duration-300 p-0">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-400 font-medium">
+                      Expenses
+                    </p>
+                    <p className="text-2xl font-bold text-red mt-2">
+                      {formatAmount(data.expense)}
+                    </p>
+                  </div>
+                  <div className="w-12 h-12 bg-red-500/20 rounded-xl flex items-center justify-center">
+                    <TrendingDown className="h-6 w-6 text-red" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-[#14161f] hover:bg-[#1c1e2b] rounded-sm transition-all duration-300 p-0">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-400 font-medium">
+                      Transactions
+                    </p>
+                    <p className="text-2xl font-bold text-purple-400 mt-2">
+                      {data.transactionCount}
+                    </p>
+                  </div>
+                  <div className="w-12 h-12 bg-purple-500/20 rounded-xl flex items-center justify-center">
+                    <BarChart3 className="h-6 w-6 text-purple-400" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Charts Row */}
+          <div className="mb-8">
+            {/* Full-width Enhanced Time Series Chart */}
+            <Card className=" border-slate-700/50 backdrop-blur-sm">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-6">
+                    <CardTitle className="flex items-center gap-2 text-sm font-semibold text-slate-300 uppercase tracking-wider">
+                      <TrendingUp className="h-5 w-5 text-purple-400" />
+                      Trends
+                    </CardTitle>
+                    {/* Time period buttons */}
+                    <div className="flex gap-1 bg-slate-800/50 rounded-lg p-1">
+                      {["hour", "date", "week", "month"].map((period) => (
+                        <Button
+                          key={period}
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            setGranularity(period as typeof granularity)
+                          }
+                          className={`text-xs px-3 py-1 rounded-md hover:bg-slate-700 ${
+                            granularity === period
+                              ? "text-white"
+                              : "text-slate-400 hover:text-white"
+                          }`}
+                        >
+                          {period}
+                        </Button>
+                      ))}
                     </div>
-                  );
-                })}
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="h-80 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={timeSeriesData}>
-                    <defs>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex gap-1 bg-slate-800/50 rounded-lg p-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setChartType("flowing")}
+                        className={`text-xs px-3 py-1 rounded-md hover:bg-slate-700 ${
+                          chartType === "flowing"
+                            ? "text-white"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        line
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setChartType("blocky")}
+                        className={`text-xs px-3 py-1 rounded-md hover:bg-slate-700 ${
+                          chartType === "blocky"
+                            ? "text-white"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        block
+                      </Button>
+                    </div>
+                    <Button
+                      onClick={() => setShowSeriesSelector(!showSeriesSelector)}
+                      variant="ghost"
+                      size="sm"
+                      className="text-slate-400 hover:text-white hover:bg-slate-700"
+                    >
+                      <Settings2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                {/* Replace the series selector section in CardHeader */}
+                {showSeriesSelector && (
+                  <div className="mt-4 p-4 bg-slate-800/30 rounded-xl border border-slate-700/50">
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-xs font-medium text-slate-300 uppercase tracking-wider">
+                        Chart Data
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          onClick={() => {
+                            setVisibleSeries(new Set());
+                          }}
+                          size="sm"
+                          variant="ghost"
+                          className="text-xs text-slate-400 hover:text-white"
+                        >
+                          Hide All
+                        </Button>
+                        <Button
+                          onClick={() => {
+                            const allKeys = availableSeries.map((s) => s.key);
+                            setVisibleSeries(new Set(allKeys));
+                          }}
+                          size="sm"
+                          variant="ghost"
+                          className="text-xs text-slate-400 hover:text-white"
+                        >
+                          Show All
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {availableSeries.map((series) => (
+                        <Button
+                          key={series.key}
+                          onClick={() => toggleSeries(series.key)}
+                          size="sm"
+                          className={`justify-start gap-2 text-xs ${
+                            visibleSeries.has(series.key)
+                              ? "bg-slate-700/50 text-white border border-slate-600/50"
+                              : "bg-transparent text-slate-400 hover:bg-slate-700/30 hover:text-white"
+                          }`}
+                        >
+                          <div
+                            className="w-2 h-2 rounded-full"
+                            style={{ backgroundColor: series.color }}
+                          />
+                          {visibleSeries.has(series.key) ? (
+                            <Eye className="h-3 w-3" />
+                          ) : (
+                            <EyeOff className="h-3 w-3" />
+                          )}
+                          {series.name}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardHeader>
+              <CardContent className="p-0 pb-6">
+                <div className="h-80 w-full px-6">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={timeSeriesData}>
+                      <defs>
+                        {[...Array.from(visibleSeries)].map((seriesKey) => {
+                          const series = availableSeries.find(
+                            (s) => s.key === seriesKey
+                          );
+                          if (!series) return null;
+                          return (
+                            <linearGradient
+                              key={seriesKey}
+                              id={`gradient-${seriesKey}`}
+                              x1="0"
+                              y1="0"
+                              x2="0"
+                              y2="1"
+                            >
+                              <stop
+                                offset="5%"
+                                stopColor={series.color}
+                                stopOpacity={0.3}
+                              />
+                              <stop
+                                offset="95%"
+                                stopColor={series.color}
+                                stopOpacity={0.05}
+                              />
+                            </linearGradient>
+                          );
+                        })}
+                      </defs>
+                      <XAxis
+                        dataKey="time"
+                        stroke="#64748b"
+                        fontSize={11}
+                        tickLine={false}
+                        axisLine={false}
+                        tick={{ fill: "#64748b" }}
+                      />
+                      <YAxis
+                        stroke="#64748b"
+                        fontSize={11}
+                        tickFormatter={formatYAxisValue}
+                        tickLine={false}
+                        axisLine={false}
+                        tick={{ fill: "#64748b" }}
+                        domain={["dataMin", "dataMax"]}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "#0f172a",
+                          border: "1px solid #334155",
+                          borderRadius: "8px",
+                          boxShadow: "0 10px 25px rgba(0,0,0,0.5)",
+                          fontSize: "12px",
+                        }}
+                        formatter={(value, name) => [
+                          `${currencyView === "inr" ? "₹" : "$"}${Number(
+                            value
+                          ).toLocaleString()}`,
+                          name,
+                        ]}
+                        labelStyle={{ color: "#94a3b8" }}
+                      />
                       {[...Array.from(visibleSeries)].map((seriesKey) => {
                         const series = availableSeries.find(
                           (s) => s.key === seriesKey
                         );
                         if (!series) return null;
                         return (
-                          <linearGradient
+                          <Area
                             key={seriesKey}
-                            id={`gradient-${seriesKey}`}
-                            x1="0"
-                            y1="0"
-                            x2="0"
-                            y2="1"
-                          >
-                            <stop
-                              offset="5%"
-                              stopColor={series.color}
-                              stopOpacity={0.3}
-                            />
-                            <stop
-                              offset="95%"
-                              stopColor={series.color}
-                              stopOpacity={0.05}
-                            />
-                          </linearGradient>
+                            type={
+                              chartType === "flowing" ? "monotone" : "stepAfter"
+                            }
+                            dataKey={seriesKey}
+                            stroke={series.color}
+                            strokeWidth={2}
+                            fill={`url(#gradient-${seriesKey})`}
+                            dot={false}
+                          />
                         );
                       })}
-                    </defs>
-                    <XAxis
-                      dataKey="time"
-                      stroke="#64748b"
-                      fontSize={12}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <YAxis
-                      stroke="#64748b"
-                      fontSize={12}
-                      tickFormatter={formatYAxisValue}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#1e293b",
-                        border: "1px solid #475569",
-                        borderRadius: "12px",
-                        boxShadow: "0 10px 25px rgba(0,0,0,0.5)",
-                      }}
-                    />
-                    {[...Array.from(visibleSeries)].map((seriesKey) => {
-                      const series = availableSeries.find(
-                        (s) => s.key === seriesKey
-                      );
-                      if (!series) return null;
-                      return (
-                        <Area
-                          key={seriesKey}
-                          type="monotone"
-                          dataKey={seriesKey}
-                          stroke={series.color}
-                          strokeWidth={3}
-                          fill={`url(#gradient-${seriesKey})`}
-                          dot={false}
-                          activeDot={{
-                            r: 6,
-                            fill: series.color,
-                            stroke: "#1e293b",
-                            strokeWidth: 2,
-                          }}
-                        />
-                      );
-                    })}
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
 
-          {/* Category Spending */}
-          <Card className="bg-gray-900/50 border-gray-800">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <PieChart className="h-5 w-5" />
-                Category Spending
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <RechartsPieChart>
-                    <Pie
-                      data={categoryData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={40}
-                      outerRadius={80}
-                      paddingAngle={5}
-                      dataKey="value"
+          {/* Account Balances & Category Breakdown */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Account Balances */}
+            <Card className="bg-gray-900/50 border-gray-800">
+              <CardHeader>
+                <CardTitle>Account Balances</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {data.accounts.map((account: Account) => (
+                    <div
+                      key={account._id}
+                      className="flex justify-between items-center p-3 rounded-lg bg-gray-800/50"
                     >
-                      {categoryData.map(
-                        (entry: CategoryDataPoint, index: number) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        )
-                      )}
-                    </Pie>
-                    <Tooltip
-                      formatter={(value: number) => [
-                        formatCurrency(
-                          value,
-                          currencyView === "inr" ? "INR" : "USD"
-                        ),
-                        "Amount",
-                      ]}
-                      contentStyle={{
-                        backgroundColor: "#1f2937",
-                        border: "1px solid #374151",
-                        borderRadius: "8px",
-                      }}
-                    />
-                  </RechartsPieChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Account Balances & Category Breakdown */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Account Balances */}
-          <Card className="bg-gray-900/50 border-gray-800">
-            <CardHeader>
-              <CardTitle>Account Balances</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {data.accounts.map((account: Account) => (
-                  <div
-                    key={account._id}
-                    className="flex justify-between items-center p-3 rounded-lg bg-gray-800/50"
-                  >
-                    <div>
-                      <p className="font-medium">{account.name}</p>
-                      <p className="text-sm text-gray-400 capitalize">
-                        {account.type}
-                      </p>
+                      <div>
+                        <p className="font-medium">{account.name}</p>
+                        <p className="text-sm text-gray-400 capitalize">
+                          {account.type}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-semibold">
+                          {formatAmount(
+                            data.accountBalances[account._id] || {}
+                          )}
+                        </p>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="font-semibold">
-                        {formatAmount(data.accountBalances[account._id] || {})}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Top Categories */}
-          <Card className="bg-gray-900/50 border-gray-800">
-            <CardHeader>
-              <CardTitle>Top Spending Categories</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {categoryData
-                  .sort((a, b) => b.value - a.value)
-                  .slice(0, 5)
-                  .map((category: CategoryDataPoint, index) => (
-                    <SpendingCategoryCard
-                      key={index}
-                      category={category}
-                      currencyView={currencyView}
-                    />
                   ))}
-              </div>
-            </CardContent>
-          </Card>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Top Categories */}
+            <Card className="bg-gray-900/50 border-gray-800">
+              <CardHeader>
+                <CardTitle>Top Spending Categories</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {categoryData
+                    .sort((a, b) => b.value - a.value)
+                    .slice(0, 5)
+                    .map((category: CategoryDataPoint, index) => (
+                      <SpendingCategoryCard
+                        key={index}
+                        category={category}
+                        currencyView={currencyView}
+                      />
+                    ))}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
